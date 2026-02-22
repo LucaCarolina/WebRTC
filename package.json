@@ -1,0 +1,16 @@
+{
+    "name": "webrtc-data-channel-starter",
+    "version": "1.0.0",
+    "description": "A minimal WebRTC data channel connection using WebSockets for signaling.",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "express": "^4.19.2",
+        "qrcode": "^1.5.3",
+        "ws": "^8.16.0"
+    },
+    "author": "",
+    "license": "ISC"
+}
