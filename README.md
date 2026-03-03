@@ -9,41 +9,28 @@ Right now, it only proves one thing: a desktop and a phone can pair 1-to-1 by sc
 - When the phone scans the QR, it opens the same page.
 - Both devices “meet”, do a quick handshake, and show a clear confirmation on both sides that the connection is established.
 
-
-
-## How to run
-1. Install dependencies:
-   npm install
-2. Start the project:
-   npm start
-3. Open the page on desktop browser (the terminal will show the address/port).
-4. Scan the QR code with the phone (same Wi‑Fi network).
-5. Wait until both screens say Connected.
-
-
 ---
 
-## 4-week README blueprint (lightweight)
+## 4-week README blueprint 
 
 ### Week 1 — Pairing + confirmation (this push)
 - Goal: Desktop + phone can connect 1-to-1 using a QR code.
 - MVP: Connection reaches a confirmed “connected” state on both devices.
-- Evidence: Both screens show Connected.
+- Extra: Waiting to get the concept approved to start the basic implementation.
 
-### Week 2 — Basic interaction (placeholder)
-- Goal: vices.
+### Week 2 — Basic interaction 
 - MVP: 
 - Evidence: 
 
-### Week 3 — Stability + UX (placeholder)
+### Week 3 — Stability + UX 
 - Goal: 
 - MVP:
-- Evidence: 
+
 
 ### Week 4 — Prototype ready 
 - Goal:
 - MVP: 
-- Evidence: 
+
 
 ---
 
