@@ -28,6 +28,7 @@ let controlActive = false;
 let controlPointer = { x: 0.5, y: 0.5 };
 let neutralTilt = { beta: 0, gamma: 0 };
 let latestTilt = { beta: 0, gamma: 0, hasReading: false };
+let latestMotion = { x: 0, y: 0, hasReading: false };
 let motionPermissionState = 'unknown';
 
 const initialParams = new URLSearchParams(location.search);
@@ -152,7 +153,7 @@ function setDefaultHelp() {
         );
     } else {
         showHelp(
-            'Keep this page open while ICE checks connectivity. Once connected, press and hold the pad to activate the laser, then tilt the phone to steer it.',
+            'Keep this page open while ICE checks connectivity. Once connected, press and hold the pad to activate the laser. Tilt will be used when the browser exposes motion sensors, otherwise drag will keep working.',
             'info'
         );
     }
@@ -178,9 +179,46 @@ function sendPointerState(active) {
     }));
 }
 
+function hasMotionApi() {
+    return typeof DeviceOrientationEvent !== 'undefined' || typeof DeviceMotionEvent !== 'undefined';
+}
+
+function hasMotionReading() {
+    return latestTilt.hasReading || latestMotion.hasReading;
+}
+
+function canUseTiltControl() {
+    if (!window.isSecureContext) return false;
+    if (motionPermissionState === 'denied' || motionPermissionState === 'unsupported') return false;
+    if (motionPermissionState === 'unknown' && typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+        return false;
+    }
+    return hasMotionApi();
+}
+
+function shouldUseTiltControl() {
+    return canUseTiltControl() && hasMotionReading();
+}
+
+function updatePhoneInstruction() {
+    if (shouldUseTiltControl()) {
+        phoneInstruction.textContent = controlActive
+            ? 'Hold to keep the laser on. Tilt the phone to steer the dot.'
+            : 'Press and hold the pad, then tilt the phone to steer the laser';
+        return;
+    }
+
+    phoneInstruction.textContent = controlActive
+        ? 'Hold to keep the laser on. Drag your finger to steer the dot.'
+        : 'Press and hold the pad, then drag to steer the laser';
+}
+
 function updateMotionButton() {
-    const needsExplicitPermission = typeof DeviceOrientationEvent !== 'undefined' &&
-        typeof DeviceOrientationEvent.requestPermission === 'function';
+    const needsExplicitPermission = (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') ||
+        (typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEvent.requestPermission === 'function');
 
     motionBtn.classList.toggle('hidden', myRole !== 'client' || !needsExplicitPermission || motionPermissionState === 'granted');
 }
@@ -197,32 +235,72 @@ function handleDeviceOrientation(event) {
     };
 
     if (controlActive) {
-        phoneInstruction.textContent = 'Hold to keep the laser on. Tilt the phone to steer the dot.';
+        updatePhoneInstruction();
+    }
+}
+
+function handleDeviceMotion(event) {
+    const acceleration = event.accelerationIncludingGravity;
+    if (!acceleration || typeof acceleration.x !== 'number' || typeof acceleration.y !== 'number') {
+        return;
+    }
+
+    latestMotion = {
+        x: acceleration.x,
+        y: acceleration.y,
+        hasReading: true,
+    };
+
+    if (controlActive) {
+        updatePhoneInstruction();
     }
 }
 
 function ensureMotionListener() {
-    if (motionListenerInitialized || typeof window.DeviceOrientationEvent === 'undefined') {
+    if (motionListenerInitialized || !hasMotionApi()) {
         return;
     }
 
-    window.addEventListener('deviceorientation', handleDeviceOrientation, true);
+    if (typeof window.DeviceOrientationEvent !== 'undefined') {
+        window.addEventListener('deviceorientation', handleDeviceOrientation, true);
+    }
+    if (typeof window.DeviceMotionEvent !== 'undefined') {
+        window.addEventListener('devicemotion', handleDeviceMotion, true);
+    }
     motionListenerInitialized = true;
 }
 
 async function requestMotionPermission() {
     ensureMotionListener();
 
-    if (typeof DeviceOrientationEvent === 'undefined') {
+    if (!window.isSecureContext) {
         motionPermissionState = 'unsupported';
-        showHelp('This browser does not expose motion sensors, so tilt aiming is unavailable here.', 'warn');
+        showHelp('Tilt steering needs a secure page. On Android, open this app from an HTTPS URL. Falling back to hold-and-drag control for now.', 'warn');
         updateMotionButton();
+        updatePhoneInstruction();
         return false;
     }
 
-    if (typeof DeviceOrientationEvent.requestPermission !== 'function') {
+    if (!hasMotionApi()) {
+        motionPermissionState = 'unsupported';
+        showHelp('This browser is not exposing motion sensors. Falling back to hold-and-drag control instead.', 'warn');
+        updateMotionButton();
+        updatePhoneInstruction();
+        return false;
+    }
+
+    const permissionRequests = [];
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        permissionRequests.push(DeviceOrientationEvent.requestPermission());
+    }
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        permissionRequests.push(DeviceMotionEvent.requestPermission());
+    }
+
+    if (permissionRequests.length === 0) {
         motionPermissionState = 'granted';
         updateMotionButton();
+        updatePhoneInstruction();
         return true;
     }
 
@@ -231,17 +309,18 @@ async function requestMotionPermission() {
     }
 
     try {
-        const result = await DeviceOrientationEvent.requestPermission();
-        motionPermissionState = result === 'granted' ? 'granted' : 'denied';
+        const results = await Promise.all(permissionRequests);
+        motionPermissionState = results.every((result) => result === 'granted') ? 'granted' : 'denied';
     } catch (error) {
         console.error('Motion permission request failed', error);
         motionPermissionState = 'denied';
     }
 
     updateMotionButton();
+    updatePhoneInstruction();
 
     if (motionPermissionState !== 'granted') {
-        showHelp('Motion access was denied, so the phone cannot steer by tilt. Enable motion access in Safari settings and try again.', 'warn');
+        showHelp('Motion access was denied or blocked, so tilt steering is unavailable. Falling back to hold-and-drag control instead.', 'warn');
         return false;
     }
 
@@ -259,14 +338,21 @@ function normalizeTilt(delta) {
 }
 
 function getTiltVector() {
-    if (!latestTilt.hasReading) {
-        return { x: 0, y: 0 };
+    if (latestTilt.hasReading) {
+        return {
+            x: normalizeTilt(latestTilt.gamma - neutralTilt.gamma),
+            y: normalizeTilt(latestTilt.beta - neutralTilt.beta),
+        };
     }
 
-    return {
-        x: normalizeTilt(latestTilt.gamma - neutralTilt.gamma),
-        y: normalizeTilt(latestTilt.beta - neutralTilt.beta),
-    };
+    if (latestMotion.hasReading) {
+        return {
+            x: normalizeTilt(latestMotion.x * 4),
+            y: normalizeTilt(latestMotion.y * -4),
+        };
+    }
+
+    return { x: 0, y: 0 };
 }
 
 function startControlLoop() {
@@ -280,9 +366,11 @@ function startControlLoop() {
         lastTimestamp = timestamp;
 
         if (controlActive) {
-            const tilt = getTiltVector();
-            controlPointer.x = clamp(controlPointer.x + (tilt.x * POINTER_SPEED * deltaSeconds), 0, 1);
-            controlPointer.y = clamp(controlPointer.y + (tilt.y * POINTER_SPEED * deltaSeconds), 0, 1);
+            if (shouldUseTiltControl()) {
+                const tilt = getTiltVector();
+                controlPointer.x = clamp(controlPointer.x + (tilt.x * POINTER_SPEED * deltaSeconds), 0, 1);
+                controlPointer.y = clamp(controlPointer.y + (tilt.y * POINTER_SPEED * deltaSeconds), 0, 1);
+            }
             updateTouchDotPosition();
             touchDot.classList.remove('hidden');
             sendPointerState(true);
@@ -296,11 +384,8 @@ function startControlLoop() {
 
 async function beginLaserControl() {
     const permissionGranted = await requestMotionPermission();
-    if (!permissionGranted && typeof DeviceOrientationEvent !== 'undefined') {
-        return false;
-    }
 
-    if (latestTilt.hasReading) {
+    if (permissionGranted && latestTilt.hasReading) {
         neutralTilt = {
             beta: latestTilt.beta,
             gamma: latestTilt.gamma,
@@ -312,13 +397,7 @@ async function beginLaserControl() {
     touchDot.classList.remove('hidden');
     sendPointerState(true);
     startControlLoop();
-
-    if (latestTilt.hasReading) {
-        phoneInstruction.textContent = 'Hold to keep the laser on. Tilt the phone to steer the dot.';
-    } else {
-        phoneInstruction.textContent = 'Hold to keep the laser on. Waiting for motion sensor readings...';
-    }
-
+    updatePhoneInstruction();
     return true;
 }
 
@@ -326,7 +405,7 @@ function endLaserControl() {
     controlActive = false;
     touchDot.classList.add('hidden');
     sendPointerState(false);
-    phoneInstruction.textContent = 'Press and hold the pad, then tilt the phone to steer the laser';
+    updatePhoneInstruction();
 }
 
 async function showQRCode() {
@@ -533,7 +612,7 @@ function setupDataChannel() {
             qrDiv.classList.add('hidden');
         } else if (myRole === 'client') {
             initPhoneTouchpad();
-            phoneInstruction.textContent = 'Press and hold the pad, then tilt the phone to steer the laser';
+            updatePhoneInstruction();
             updateMotionButton();
         }
     };
@@ -749,9 +828,23 @@ function initPhoneTouchpad() {
         await beginLaserControl();
     }
 
+    function updateTouchPointer(event) {
+        const touch = event.touches[0];
+        if (!touch) return;
+
+        const rect = touchpad.getBoundingClientRect();
+        controlPointer.x = clamp((touch.clientX - rect.left) / rect.width, 0, 1);
+        controlPointer.y = clamp((touch.clientY - rect.top) / rect.height, 0, 1);
+        updateTouchDotPosition();
+        sendPointerState(true);
+    }
+
     function preventWhileActive(event) {
         if (controlActive) {
             event.preventDefault();
+            if (!shouldUseTiltControl()) {
+                updateTouchPointer(event);
+            }
         }
     }
 
