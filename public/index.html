@@ -2,23 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>WebRTC Data Channel Starter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Cat Laser Pointer Remote</title>
+  <meta name="description" content="Control a laser pointer from your phone and watch the cat chase it on the desktop screen.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>WebRTC 1-to-1 Starter</h1>
-  
-  <div class="card">
-    <div id="status" class="status">Initializing...</div>
+  <div id="status" class="status">Connecting…</div>
+  <div id="session-meta" class="session-meta"></div>
+  <div id="connection-help" class="help-card hidden"></div>
+  <div class="action-row">
+    <button id="retry-btn" class="action-btn hidden" type="button">Retry connection</button>
+  </div>
+
+  <div id="host-panel" class="panel hidden">
     <div id="qr" class="qr-container"></div>
-    
-    <div class="controls">
-      <button id="send-btn" disabled>Send Test Message</button>
-    </div>
-    
-    <div id="messages" class="messages-container">
-      <h3>Messages:</h3>
-      <!-- Messages will appear here -->
+    <canvas id="arena"></canvas>
+  </div>
+
+  <div id="phone-panel" class="panel hidden">
+    <p id="phone-instruction" class="instruction">Touch and drag to move the laser</p>
+    <button id="motion-btn" class="action-btn hidden" type="button">Enable motion control</button>
+    <div id="touchpad">
+      <div id="touch-dot" class="touch-dot hidden"></div>
     </div>
   </div>
 

@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const os = require('os');
 const WebSocket = require('ws');
 const QRCode = require('qrcode');
 
@@ -10,83 +11,197 @@ const wss = new WebSocket.Server({ server });
 // Serve static files from the 'public' folder
 app.use(express.static('public'));
 
-// Quick endpoint to generate QR code on the fly
+// Return a QR code image for any URL
 app.get('/qr', async (req, res) => {
     try {
         const url = req.query.url;
         if (!url) return res.status(400).send('URL required');
-        const qrDataUrl = await QRCode.toDataURL(url);
+        const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 256 });
         res.send(`<img src="${qrDataUrl}" alt="QR Code" />`);
     } catch (error) {
         res.status(500).send('Error generating QR code');
     }
 });
 
-let peers = {
-    host: null,
-    client: null
-};
+// Return the server's usable URLs so the host page can build a scannable QR URL
+app.get('/ip', (req, res) => {
+    res.json({ ips: getLanIPs() });
+});
 
-wss.on('connection', (ws) => {
-    let role = null;
+function getLanIPs() {
+    const interfaces = os.networkInterfaces();
+    const ips = [];
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                ips.push(iface.address);
+            }
+        }
+    }
+    return ips.length > 0 ? ips : ['localhost'];
+}
 
-    // Assign roles based on who is missing. First is host, second is client.
-    if (!peers.host) {
-        role = 'host';
-        peers.host = ws;
-        console.log('Host connected');
-    } else if (!peers.client) {
-        role = 'client';
-        peers.client = ws;
-        console.log('Client connected');
-    } else {
-        // Already full room
-        ws.send(JSON.stringify({ type: 'error', message: 'Room is full' }));
-        ws.close();
+// ─── Signaling ───
+
+const rooms = new Map();
+const RELAY_MESSAGE_TYPES = new Set(['offer', 'answer', 'candidate']);
+
+function send(ws, payload) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+    }
+}
+
+function getRoom(roomId) {
+    if (!rooms.has(roomId)) {
+        rooms.set(roomId, { host: null, client: null });
+    }
+    return rooms.get(roomId);
+}
+
+function getOtherRole(role) {
+    return role === 'host' ? 'client' : 'host';
+}
+
+function chooseRole(room, requestedRole) {
+    if (requestedRole === 'host' || requestedRole === 'client') {
+        return room[requestedRole] ? null : requestedRole;
+    }
+    if (!room.host) return 'host';
+    if (!room.client) return 'client';
+    return null;
+}
+
+function cleanupPeer(ws) {
+    if (!ws.roomId || !ws.role) return;
+
+    const room = rooms.get(ws.roomId);
+    if (!room) return;
+
+    if (room[ws.role] === ws) {
+        room[ws.role] = null;
+    }
+
+    const otherPeer = room[getOtherRole(ws.role)];
+    send(otherPeer, { type: 'peer_left', role: ws.role, room: ws.roomId });
+
+    if (!room.host && !room.client) {
+        rooms.delete(ws.roomId);
+    }
+
+    ws.roomId = null;
+    ws.role = null;
+}
+
+function joinRoom(ws, data) {
+    const roomId = String(data.room || '').trim();
+    const requestedRole = data.requestedRole;
+
+    if (!/^[a-zA-Z0-9_-]{4,32}$/.test(roomId)) {
+        send(ws, { type: 'error', message: 'Invalid room id.' });
         return;
     }
 
-    // Send the role to the connected peer
-    ws.send(JSON.stringify({ type: 'role', role: role }));
+    cleanupPeer(ws);
 
-    // Notify the host if the client just connected
-    if (role === 'client' && peers.host) {
-        peers.host.send(JSON.stringify({ type: 'client_connected' }));
+    const room = getRoom(roomId);
+    const role = chooseRole(room, requestedRole);
+
+    if (!role) {
+        send(ws, { type: 'error', message: 'That room slot is already in use.' });
+        return;
     }
 
-    // Handle incoming signaling messages
+    ws.roomId = roomId;
+    ws.role = role;
+    room[role] = ws;
+
+    console.log(`${role} joined room ${roomId}`);
+
+    const otherPeer = room[getOtherRole(role)];
+    send(ws, {
+        type: 'joined',
+        room: roomId,
+        role,
+        peerPresent: Boolean(otherPeer),
+    });
+
+    if (otherPeer) {
+        send(ws, { type: 'peer_ready', room: roomId, peerRole: otherPeer.role });
+        send(otherPeer, { type: 'peer_ready', room: roomId, peerRole: role });
+    }
+}
+
+function relayToPeer(ws, message) {
+    if (!ws.roomId || !ws.role) {
+        send(ws, { type: 'error', message: 'Join a room before signaling.' });
+        return;
+    }
+
+    const room = rooms.get(ws.roomId);
+    if (!room) {
+        send(ws, { type: 'error', message: 'Room no longer exists.' });
+        return;
+    }
+
+    const target = room[getOtherRole(ws.role)];
+    if (!target) {
+        send(ws, { type: 'error', message: 'The other peer is not connected yet.' });
+        return;
+    }
+
+    send(target, message);
+}
+
+wss.on('connection', (ws) => {
+    ws.roomId = null;
+    ws.role = null;
+
     ws.on('message', (message) => {
         let data;
         try {
             data = JSON.parse(message);
-        } catch (e) {
-            return console.error('Invalid message format', message);
+        } catch (error) {
+            send(ws, { type: 'error', message: 'Invalid message format.' });
+            return;
         }
 
-        console.log(`Received message of type ${data.type} from ${role}`);
-
-        // Relay messages to the other peer
-        const target = (role === 'host') ? peers.client : peers.host;
-        if (target && target.readyState === WebSocket.OPEN) {
-            target.send(JSON.stringify(data));
+        if (data.type === 'join') {
+            joinRoom(ws, data);
+            return;
         }
+
+        if (data.type === 'leave') {
+            cleanupPeer(ws);
+            return;
+        }
+
+        if (RELAY_MESSAGE_TYPES.has(data.type)) {
+            relayToPeer(ws, data);
+            return;
+        }
+
+        send(ws, { type: 'error', message: `Unsupported message type: ${data.type}` });
     });
 
-    // Clean up on disconnect
     ws.on('close', () => {
-        console.log(`${role} disconnected`);
-        if (role === 'host') {
-            peers.host = null;
-        } else if (role === 'client') {
-            peers.client = null;
+        if (ws.role) {
+            console.log(`${ws.role} disconnected from room ${ws.roomId}`);
         }
+        cleanupPeer(ws);
     });
 });
 
+// ─── Start ───
+
 const PORT = process.env.PORT || 3000;
+
 server.listen(PORT, '0.0.0.0', () => {
-    // Listen on all interfaces so phone can connect via local IP
-    console.log(`\nServer started on port ${PORT}`);
-    console.log(`1. Local access: http://localhost:${PORT}`);
-    console.log(`2. Find your local network IP (e.g., 192.168.x.x) and open that on your computer so the phone can reach it.`);
+    const ips = getLanIPs();
+    console.log(`\n🐱 Cat Laser Pointer Remote`);
+    console.log(`   Local:   http://localhost:${PORT}`);
+    ips.forEach(ip => {
+        console.log(`   Network: http://${ip}:${PORT}`);
+    });
+    console.log('\n   For broadest compatibility, deploy this same app behind HTTPS/WSS and share the generated room QR code.\n');
 });
