@@ -1,4 +1,6 @@
 # WebRTC Smartphone-to-Desktop Control Project
+Overall for the assignment i used ai to help me rephrase (phrase sometimes) the readme file, as it was turning to be way too messy when i was doing it myself. 
+
 
 ## What this repository is
 
@@ -163,7 +165,8 @@ By the end of this week, I had a basic WebRTC handshake working between desktop 
 
 The main achievement was reaching a confirmed connected state between the two devices.
 
-
+### Missed the consult:
+By the point of the consult i didnt have too much to show, besides explain the concept, which was pretty messy and unclear even to myself.
 
 ## Week 2
 ### Goal
@@ -238,7 +241,8 @@ The project direction became much clearer during this week.
 
 Instead of staying as only a connection test, it became a real control-based experience with a defined concept.
 
-
+### Missed the consult: 
+I had missed the consult for personal reasons. As my parants showed up in Kortjik for a suprise visit and it felt bad to not be with them and how them around the city as they werent here for a long time. and as everything was kind of working, and i organised the concept properly i decided to skip the consult. Apologies.
 
 
 ## Week 3
@@ -250,7 +254,8 @@ I was sick during Week 3, so I was not able to make meaningful development progr
 
 Because of that, this week contains very little implementation work.
 
-
+### Missed the consult: 
+this week i was sick for 6 days, which i have proven with doctors notes, attached and verified on ibamafex.
 
 ## Week 4
 ### Goal
