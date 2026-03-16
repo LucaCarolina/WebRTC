@@ -203,5 +203,5 @@ server.listen(PORT, '0.0.0.0', () => {
     ips.forEach(ip => {
         console.log(`   Network: http://${ip}:${PORT}`);
     });
-    console.log('\n   For broadest compatibility, deploy this same app behind HTTPS/WSS and share the generated room QR code.\n');
+    console.log('');
 });

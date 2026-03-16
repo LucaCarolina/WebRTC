@@ -1,764 +1,311 @@
-// ─── DOM References ───
-const statusDiv = document.getElementById('status');
-const sessionMetaDiv = document.getElementById('session-meta');
-const helpDiv = document.getElementById('connection-help');
-const retryBtn = document.getElementById('retry-btn');
-const hostPanel = document.getElementById('host-panel');
-const phonePanel = document.getElementById('phone-panel');
-const phoneInstruction = document.getElementById('phone-instruction');
-const motionBtn = document.getElementById('motion-btn');
-const qrDiv = document.getElementById('qr');
-const canvas = document.getElementById('arena');
-const touchpad = document.getElementById('touchpad');
-const touchDot = document.getElementById('touch-dot');
+var statusDiv = document.getElementById('status');
+var retryBtn = document.getElementById('retry-btn');
+var hostPanel = document.getElementById('host-panel');
+var phonePanel = document.getElementById('phone-panel');
+var qrDiv = document.getElementById('qr');
+var canvas = document.getElementById('arena');
+var touchpad = document.getElementById('touchpad');
+var touchDot = document.getElementById('touch-dot');
 
-// ─── Session State ───
-let ws;
-let peerConnection;
-let dataChannel;
-let myRole = null;
-let peerPresent = false;
-let pendingRemoteCandidates = [];
-let offerInProgress = false;
-let hostRendererStarted = false;
-let touchpadInitialized = false;
-let motionListenerInitialized = false;
-let controlLoopRunning = false;
-let controlActive = false;
-let controlPointer = { x: 0.5, y: 0.5 };
-let neutralTilt = { beta: 0, gamma: 0 };
-let latestTilt = { beta: 0, gamma: 0, hasReading: false };
-let latestMotion = { x: 0, y: 0, hasReading: false };
-let motionPermissionState = 'unknown';
+var ws;
+var peerConnection;
+var dataChannel;
+var myRole = null;
+var peerPresent = false;
+var pendingCandidates = [];
+var hostRendererStarted = false;
+var touchpadReady = false;
 
-const initialParams = new URLSearchParams(location.search);
-const requestedRole = initialParams.get('role') === 'client' ? 'client' : 'host';
-let roomId = sanitizeRoomId(initialParams.get('room')) || '';
+var params = new URLSearchParams(location.search);
+var requestedRole = params.get('role') === 'client' ? 'client' : 'host';
+var roomId = params.get('room') || '';
 
+if (roomId && !/^[a-zA-Z0-9_-]{4,32}$/.test(roomId)) roomId = '';
 if (!roomId && requestedRole === 'host') {
-    roomId = createRoomId();
+    roomId = Math.random().toString(36).slice(2, 10);
 }
 
-// Laser + cat state (host only)
-let laser = { x: 0.5, y: 0.5, active: false };
-let cat = { x: 0.5, y: 0.5 };
-let catImg = null;
-const CAT_LERP = 0.06;
-const CAT_SIZE = 64;
-const TILT_RANGE_DEGREES = 30;
-const TILT_DEADZONE = 0.08;
-const POINTER_SPEED = 0.85;
+var laser = { x: 0.5, y: 0.5, active: false };
+var cat = { x: 0.5, y: 0.5 };
+var catImg = null;
+var CAT_LERP = 0.06;
+var CAT_SIZE = 64;
 
-// Keep the RTCPeerConnection setup aligned with the course slides.
-const servers = {
+var servers = {
     iceServers: [{
         urls: 'stun:stun.l.google.com:19302'
     }]
 };
 
-function sanitizeRoomId(value) {
-    if (!value) return '';
-    return /^[a-zA-Z0-9_-]{4,32}$/.test(value) ? value : '';
-}
+// ── Helpers ──
 
-function createRoomId() {
-    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
-        return window.crypto.randomUUID().split('-')[0];
-    }
-    return Math.random().toString(36).slice(2, 10);
-}
-
-function updateAddressBar() {
-    const url = new URL(location.href);
-    url.searchParams.set('room', roomId);
-    if (requestedRole === 'client') {
-        url.searchParams.set('role', 'client');
-    } else {
-        url.searchParams.delete('role');
-    }
-    history.replaceState({}, '', url);
-}
-
-function updateStatus(message, state) {
-    statusDiv.textContent = message;
+function setStatus(msg, state) {
+    statusDiv.textContent = msg;
     statusDiv.className = 'status' + (state ? ' ' + state : '');
 }
 
-function showHelp(message, tone = 'info') {
-    if (!message) {
-        helpDiv.className = 'help-card hidden';
-        helpDiv.innerHTML = '';
-        return;
-    }
-    helpDiv.className = `help-card ${tone}`;
-    helpDiv.innerHTML = message;
+function showRetry(show) {
+    retryBtn.classList.toggle('hidden', !show);
 }
 
-function setRetryButton(visible, label = 'Retry connection') {
-    retryBtn.textContent = label;
-    retryBtn.classList.toggle('hidden', !visible);
+function showPanels() {
+    var role = myRole || requestedRole;
+    hostPanel.classList.toggle('hidden', role !== 'host');
+    phonePanel.classList.toggle('hidden', role !== 'client');
 }
 
-function updateSessionMeta(extra = '') {
-    const activeRole = myRole || requestedRole;
-    const roleLabel = activeRole === 'host' ? 'desktop host' : 'phone controller';
-    const peerLabel = peerPresent ? 'Peer joined' : 'Waiting for peer';
-    sessionMetaDiv.innerHTML = `Room <code>${roomId || 'pending'}</code> • ${roleLabel} • ${peerLabel}${extra ? ` • ${extra}` : ''}`;
-}
-
-function renderPanels() {
-    const activeRole = myRole || requestedRole;
-    hostPanel.classList.toggle('hidden', activeRole !== 'host');
-    phonePanel.classList.toggle('hidden', activeRole !== 'client');
-}
-
-function isDataChannelOpen() {
-    return Boolean(dataChannel && dataChannel.readyState === 'open');
-}
-
-function sendSignal(payload) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify(payload));
-}
-
-async function resolveShareOrigin() {
-    if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        return location.origin;
-    }
-
-    const res = await fetch('/ip');
-    const { ips } = await res.json();
-    const lanIp = ips.find((ip) => ip !== 'localhost');
-
-    if (!lanIp) {
-        throw new Error('Could not determine a reachable LAN IP.');
-    }
-
-    return `http://${lanIp}:${location.port}`;
-}
-
-async function buildClientJoinUrl() {
-    const origin = await resolveShareOrigin();
-    const url = new URL(location.pathname || '/', origin);
+function updateUrl() {
+    var url = new URL(location.href);
     url.searchParams.set('room', roomId);
-    url.searchParams.set('role', 'client');
-    return url.toString();
+    if (requestedRole === 'client') url.searchParams.set('role', 'client');
+    else url.searchParams.delete('role');
+    history.replaceState({}, '', url);
 }
 
-function setDefaultHelp() {
-    if ((myRole || requestedRole) === 'host') {
-        showHelp(
-            'Share the QR code with the controller device. If this app is deployed publicly over HTTPS/WSS, both peers can load it from different networks. In local LAN mode, the phone must still be able to reach the laptop directly.',
-            'info'
-        );
-    } else {
-        showHelp(
-            'Keep this page open while ICE checks connectivity. Once connected, press and hold the pad to activate the laser. Tilt will be used when the browser exposes motion sensors, otherwise drag will keep working.',
-            'info'
-        );
+function wsSend(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
     }
 }
 
-function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
+function dcOpen() {
+    return dataChannel && dataChannel.readyState === 'open';
 }
 
-function updateTouchDotPosition() {
-    touchDot.style.left = (controlPointer.x * 100) + '%';
-    touchDot.style.top = (controlPointer.y * 100) + '%';
+// ── QR Code ──
+
+async function getJoinUrl() {
+    var origin = location.origin;
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        var res = await fetch('/ip');
+        var data = await res.json();
+        var ip = data.ips.find(function (ip) { return ip !== 'localhost'; });
+        if (ip) origin = 'http://' + ip + ':' + location.port;
+    }
+    return origin + '/?room=' + roomId + '&role=client';
 }
 
-function sendPointerState(active) {
-    if (!isDataChannelOpen()) return;
-
-    dataChannel.send(JSON.stringify({
-        type: 'pointer',
-        x: controlPointer.x,
-        y: controlPointer.y,
-        active,
-    }));
-}
-
-function hasMotionApi() {
-    return typeof DeviceOrientationEvent !== 'undefined' || typeof DeviceMotionEvent !== 'undefined';
-}
-
-function hasMotionReading() {
-    return latestTilt.hasReading || latestMotion.hasReading;
-}
-
-function canUseTiltControl() {
-    if (!window.isSecureContext) return false;
-    if (motionPermissionState === 'denied' || motionPermissionState === 'unsupported') return false;
-    if (motionPermissionState === 'unknown' && typeof DeviceOrientationEvent !== 'undefined' &&
-        typeof DeviceOrientationEvent.requestPermission === 'function') {
-        return false;
-    }
-    return hasMotionApi();
-}
-
-function shouldUseTiltControl() {
-    return canUseTiltControl() && hasMotionReading();
-}
-
-function updatePhoneInstruction() {
-    if (shouldUseTiltControl()) {
-        phoneInstruction.textContent = controlActive
-            ? 'Hold to keep the laser on. Tilt the phone to steer the dot.'
-            : 'Press and hold the pad, then tilt the phone to steer the laser';
-        return;
-    }
-
-    phoneInstruction.textContent = controlActive
-        ? 'Hold to keep the laser on. Drag your finger to steer the dot.'
-        : 'Press and hold the pad, then drag to steer the laser';
-}
-
-function updateMotionButton() {
-    const needsExplicitPermission = (typeof DeviceOrientationEvent !== 'undefined' &&
-        typeof DeviceOrientationEvent.requestPermission === 'function') ||
-        (typeof DeviceMotionEvent !== 'undefined' &&
-        typeof DeviceMotionEvent.requestPermission === 'function');
-
-    motionBtn.classList.toggle('hidden', myRole !== 'client' || !needsExplicitPermission || motionPermissionState === 'granted');
-}
-
-function handleDeviceOrientation(event) {
-    if (typeof event.beta !== 'number' || typeof event.gamma !== 'number') {
-        return;
-    }
-
-    latestTilt = {
-        beta: event.beta,
-        gamma: event.gamma,
-        hasReading: true,
-    };
-
-    if (controlActive) {
-        updatePhoneInstruction();
-    }
-}
-
-function handleDeviceMotion(event) {
-    const acceleration = event.accelerationIncludingGravity;
-    if (!acceleration || typeof acceleration.x !== 'number' || typeof acceleration.y !== 'number') {
-        return;
-    }
-
-    latestMotion = {
-        x: acceleration.x,
-        y: acceleration.y,
-        hasReading: true,
-    };
-
-    if (controlActive) {
-        updatePhoneInstruction();
-    }
-}
-
-function ensureMotionListener() {
-    if (motionListenerInitialized || !hasMotionApi()) {
-        return;
-    }
-
-    if (typeof window.DeviceOrientationEvent !== 'undefined') {
-        window.addEventListener('deviceorientation', handleDeviceOrientation, true);
-    }
-    if (typeof window.DeviceMotionEvent !== 'undefined') {
-        window.addEventListener('devicemotion', handleDeviceMotion, true);
-    }
-    motionListenerInitialized = true;
-}
-
-async function requestMotionPermission() {
-    ensureMotionListener();
-
-    if (!window.isSecureContext) {
-        motionPermissionState = 'unsupported';
-        showHelp('Tilt steering needs a secure page. On Android, open this app from an HTTPS URL. Falling back to hold-and-drag control for now.', 'warn');
-        updateMotionButton();
-        updatePhoneInstruction();
-        return false;
-    }
-
-    if (!hasMotionApi()) {
-        motionPermissionState = 'unsupported';
-        showHelp('This browser is not exposing motion sensors. Falling back to hold-and-drag control instead.', 'warn');
-        updateMotionButton();
-        updatePhoneInstruction();
-        return false;
-    }
-
-    const permissionRequests = [];
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        permissionRequests.push(DeviceOrientationEvent.requestPermission());
-    }
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        permissionRequests.push(DeviceMotionEvent.requestPermission());
-    }
-
-    if (permissionRequests.length === 0) {
-        motionPermissionState = 'granted';
-        updateMotionButton();
-        updatePhoneInstruction();
-        return true;
-    }
-
-    if (motionPermissionState === 'granted') {
-        return true;
-    }
-
+async function showQR() {
     try {
-        const results = await Promise.all(permissionRequests);
-        motionPermissionState = results.every((result) => result === 'granted') ? 'granted' : 'denied';
-    } catch (error) {
-        console.error('Motion permission request failed', error);
-        motionPermissionState = 'denied';
-    }
-
-    updateMotionButton();
-    updatePhoneInstruction();
-
-    if (motionPermissionState !== 'granted') {
-        showHelp('Motion access was denied or blocked, so tilt steering is unavailable. Falling back to hold-and-drag control instead.', 'warn');
-        return false;
-    }
-
-    showHelp('Motion access granted. Press and hold the pad, then tilt the phone to steer the laser.', 'success');
-    return true;
-}
-
-function normalizeTilt(delta) {
-    const scaled = clamp(delta / TILT_RANGE_DEGREES, -1, 1);
-    if (Math.abs(scaled) < TILT_DEADZONE) {
-        return 0;
-    }
-
-    return scaled;
-}
-
-function getTiltVector() {
-    if (latestTilt.hasReading) {
-        return {
-            x: normalizeTilt(latestTilt.gamma - neutralTilt.gamma),
-            y: normalizeTilt(latestTilt.beta - neutralTilt.beta),
-        };
-    }
-
-    if (latestMotion.hasReading) {
-        return {
-            x: normalizeTilt(latestMotion.x * 4),
-            y: normalizeTilt(latestMotion.y * -4),
-        };
-    }
-
-    return { x: 0, y: 0 };
-}
-
-function startControlLoop() {
-    if (controlLoopRunning) return;
-    controlLoopRunning = true;
-
-    let lastTimestamp = performance.now();
-
-    function frame(timestamp) {
-        const deltaSeconds = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
-        lastTimestamp = timestamp;
-
-        if (controlActive) {
-            if (shouldUseTiltControl()) {
-                const tilt = getTiltVector();
-                controlPointer.x = clamp(controlPointer.x + (tilt.x * POINTER_SPEED * deltaSeconds), 0, 1);
-                controlPointer.y = clamp(controlPointer.y + (tilt.y * POINTER_SPEED * deltaSeconds), 0, 1);
-            }
-            updateTouchDotPosition();
-            touchDot.classList.remove('hidden');
-            sendPointerState(true);
-        }
-
-        requestAnimationFrame(frame);
-    }
-
-    requestAnimationFrame(frame);
-}
-
-async function beginLaserControl() {
-    const permissionGranted = await requestMotionPermission();
-
-    if (permissionGranted && latestTilt.hasReading) {
-        neutralTilt = {
-            beta: latestTilt.beta,
-            gamma: latestTilt.gamma,
-        };
-    }
-
-    controlActive = true;
-    updateTouchDotPosition();
-    touchDot.classList.remove('hidden');
-    sendPointerState(true);
-    startControlLoop();
-    updatePhoneInstruction();
-    return true;
-}
-
-function endLaserControl() {
-    controlActive = false;
-    touchDot.classList.add('hidden');
-    sendPointerState(false);
-    updatePhoneInstruction();
-}
-
-async function showQRCode() {
-    try {
-        const targetUrl = await buildClientJoinUrl();
-        const qrRes = await fetch('/qr?url=' + encodeURIComponent(targetUrl));
-        const html = await qrRes.text();
-        const target = new URL(targetUrl);
-        const usesDirectLocalAddress = target.protocol === 'http:' &&
-            (/^localhost$|^127\.0\.0\.1$/.test(target.hostname) || /^(\d{1,3}\.){3}\d{1,3}$/.test(target.hostname));
-        const localNote = usesDirectLocalAddress
-            ? 'You are in local dev mode, so this QR points to your laptop LAN address. That works only when the phone can actually reach the laptop on the same local network.'
-            : 'This QR points back to the current site origin, so it works for public HTTPS deployments and cross-network demos as long as STUN can establish a direct path.';
-
+        var url = await getJoinUrl();
+        var res = await fetch('/qr?url=' + encodeURIComponent(url));
+        var img = await res.text();
         qrDiv.classList.remove('hidden');
-        qrDiv.innerHTML = `
-            <p class="qr-title">Scan to join room ${roomId}</p>
-            ${html}
-            <p class="qr-url">${targetUrl}</p>
-            <p class="qr-note">${localNote}</p>
-        `;
-        updateSessionMeta('Share via QR or URL');
-    } catch (error) {
-        console.error(error);
-        qrDiv.classList.remove('hidden');
-        qrDiv.innerHTML = '<p style="color:#ff7f7f">Failed to generate a join URL. Open the app from a reachable LAN or public URL and try again.</p>';
-        showHelp(
-            'The host could not build a reachable join link. If you started from <code>localhost</code>, open the LAN URL from your terminal or deploy the app publicly over HTTPS/WSS.',
-            'error'
-        );
-        setRetryButton(true, 'Reload session');
+        qrDiv.innerHTML = '<p>Scan to connect</p>' + img + '<p class="qr-url">' + url + '</p>';
+    } catch (e) {
+        console.error(e);
+        qrDiv.innerHTML = '<p>Could not generate QR code</p>';
     }
 }
 
-function resetRtcState() {
-    offerInProgress = false;
-    pendingRemoteCandidates = [];
+// ── WebRTC ──
 
+function cleanupRTC() {
+    pendingCandidates = [];
     if (dataChannel) {
-        dataChannel.onopen = null;
-        dataChannel.onclose = null;
-        dataChannel.onmessage = null;
-        if (dataChannel.readyState !== 'closed') {
-            dataChannel.close();
-        }
+        dataChannel.onopen = dataChannel.onclose = dataChannel.onmessage = null;
+        if (dataChannel.readyState !== 'closed') dataChannel.close();
+        dataChannel = null;
     }
-    dataChannel = null;
-
     if (peerConnection) {
         peerConnection.onicecandidate = null;
-        peerConnection.onicegatheringstatechange = null;
         peerConnection.oniceconnectionstatechange = null;
         peerConnection.onconnectionstatechange = null;
         peerConnection.ondatachannel = null;
-        if (peerConnection.signalingState !== 'closed') {
-            peerConnection.close();
-        }
+        if (peerConnection.signalingState !== 'closed') peerConnection.close();
+        peerConnection = null;
     }
-    peerConnection = null;
 }
 
-function createPeerConnection() {
+function makePeerConnection() {
     if (peerConnection) return peerConnection;
 
     peerConnection = new RTCPeerConnection(servers);
 
-    peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            sendSignal({ type: 'candidate', candidate: event.candidate });
-        }
+    peerConnection.onicecandidate = function (e) {
+        if (e.candidate) wsSend({ type: 'candidate', candidate: e.candidate });
     };
 
-    peerConnection.onicegatheringstatechange = () => {
-        if (!peerConnection || isDataChannelOpen()) return;
-
-        if (peerConnection.iceGatheringState === 'gathering') {
-            updateStatus('Gathering ICE candidates…');
-            showHelp('ICE is collecting local and STUN-discovered network candidates before testing them.', 'info');
-        } else if (peerConnection.iceGatheringState === 'complete') {
-            updateStatus('ICE gathering complete. Checking connectivity…');
-        }
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
+    peerConnection.oniceconnectionstatechange = function () {
         if (!peerConnection) return;
-
-        const state = peerConnection.iceConnectionState;
-        if (state === 'checking') {
-            updateStatus('Checking direct peer-to-peer connectivity…');
-            showHelp('STUN is now testing candidate pairs between both peers. This can take a few seconds.', 'info');
-        } else if (state === 'connected' || state === 'completed') {
-            updateStatus('Peer-to-peer path found. Opening data channel…');
-            showHelp('ICE succeeded and a direct path exists. The RTCDataChannel should open momentarily.', 'success');
-        } else if (state === 'disconnected') {
-            updateStatus('Peer connection dropped. Retry this room or re-scan the QR code.', 'error');
-            showHelp('The direct path was interrupted. This can happen when a network changes or an aggressive NAT drops the mapping.', 'warn');
-            setRetryButton(true);
-        } else if (state === 'failed') {
-            updateStatus('Direct peer-to-peer connection failed on this network.', 'error');
-            showHelp('Signaling still worked, but STUN could not establish a direct path. Without TURN, that can still happen on restrictive university, carrier, or hotspot networks.', 'error');
-            setRetryButton(true);
-        }
+        var s = peerConnection.iceConnectionState;
+        if (s === 'connected' || s === 'completed') setStatus('Connected!', 'ok');
+        if (s === 'disconnected') { setStatus('Disconnected.', 'err'); showRetry(true); }
+        if (s === 'failed') { setStatus('Connection failed.', 'err'); showRetry(true); }
     };
 
-    peerConnection.onconnectionstatechange = () => {
+    peerConnection.onconnectionstatechange = function () {
         if (!peerConnection) return;
-
-        const state = peerConnection.connectionState;
-        if (state === 'connected') {
-            updateStatus('Connected!', 'connected');
-            showHelp('RTCDataChannel traffic is now flowing directly between the two browsers.', 'success');
-            setRetryButton(false);
-        } else if (state === 'failed') {
-            updateStatus('WebRTC connection failed.', 'error');
-            setRetryButton(true);
+        if (peerConnection.connectionState === 'connected') {
+            setStatus('Connected!', 'ok');
+            showRetry(false);
+        }
+        if (peerConnection.connectionState === 'failed') {
+            setStatus('Connection failed.', 'err');
+            showRetry(true);
         }
     };
 
-    peerConnection.ondatachannel = (event) => {
-        dataChannel = event.channel;
+    peerConnection.ondatachannel = function (e) {
+        dataChannel = e.channel;
         setupDataChannel();
     };
 
     return peerConnection;
 }
 
-async function flushPendingCandidates() {
+async function flushCandidates() {
     if (!peerConnection || !peerConnection.remoteDescription) return;
-
-    while (pendingRemoteCandidates.length > 0) {
-        const candidate = pendingRemoteCandidates.shift();
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    while (pendingCandidates.length) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(pendingCandidates.shift()));
     }
 }
 
-async function startWebRTCHandshake() {
-    if (myRole !== 'host' || !peerPresent || offerInProgress || isDataChannelOpen()) return;
-
-    offerInProgress = true;
-    resetRtcState();
-    const connection = createPeerConnection();
-    dataChannel = connection.createDataChannel('control');
+async function startOffer() {
+    if (myRole !== 'host' || !peerPresent || dcOpen()) return;
+    cleanupRTC();
+    var pc = makePeerConnection();
+    dataChannel = pc.createDataChannel('control');
     setupDataChannel();
-
-    try {
-        updateStatus('Creating offer…');
-        const offer = await connection.createOffer();
-        await connection.setLocalDescription(offer);
-        sendSignal({ type: 'offer', offer });
-    } catch (error) {
-        console.error('Offer creation failed', error);
-        updateStatus('Failed to create the WebRTC offer.', 'error');
-        showHelp('The host could not start negotiation. Reload the room and try again.', 'error');
-        setRetryButton(true);
-        offerInProgress = false;
-    }
+    setStatus('Starting connection...');
+    var offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    wsSend({ type: 'offer', offer: offer });
 }
 
 async function handleOffer(offer) {
-    resetRtcState();
-    const connection = createPeerConnection();
-
-    updateStatus('Offer received. Creating answer…');
-    await connection.setRemoteDescription(new RTCSessionDescription(offer));
-    await flushPendingCandidates();
-
-    const answer = await connection.createAnswer();
-    await connection.setLocalDescription(answer);
-    sendSignal({ type: 'answer', answer });
+    cleanupRTC();
+    var pc = makePeerConnection();
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    await flushCandidates();
+    var answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    wsSend({ type: 'answer', answer: answer });
 }
 
 async function handleAnswer(answer) {
     if (!peerConnection) return;
-
     await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-    await flushPendingCandidates();
+    await flushCandidates();
 }
 
 async function handleCandidate(candidate) {
     if (!candidate) return;
-
     if (!peerConnection || !peerConnection.remoteDescription) {
-        pendingRemoteCandidates.push(candidate);
+        pendingCandidates.push(candidate);
         return;
     }
-
-    try {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (error) {
-        console.error('ICE candidate error', error);
-    }
+    try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidate)); }
+    catch (e) { console.error('ICE error', e); }
 }
 
 function setupDataChannel() {
     if (!dataChannel) return;
 
-    dataChannel.onopen = () => {
-        offerInProgress = false;
-        updateStatus('Connected!', 'connected');
-        showHelp('The direct RTCDataChannel is open. Pointer events now bypass the signaling server.', 'success');
-        setRetryButton(false);
-
-        if (myRole === 'host') {
-            qrDiv.classList.add('hidden');
-        } else if (myRole === 'client') {
-            initPhoneTouchpad();
-            updatePhoneInstruction();
-            updateMotionButton();
-        }
+    dataChannel.onopen = function () {
+        setStatus('Connected!', 'ok');
+        showRetry(false);
+        if (myRole === 'host') qrDiv.classList.add('hidden');
+        if (myRole === 'client') initTouchpad();
     };
 
-    dataChannel.onclose = () => {
-        if (peerPresent) {
-            updateStatus('Data channel closed. Retry this room.', 'error');
-            showHelp('The peer-to-peer channel closed after negotiation. Rejoin the same room or switch networks and try again.', 'warn');
-            setRetryButton(true);
-        }
+    dataChannel.onclose = function () {
+        if (peerPresent) { setStatus('Disconnected.', 'err'); showRetry(true); }
     };
 
-    dataChannel.onmessage = (event) => {
+    dataChannel.onmessage = function (e) {
         if (myRole !== 'host') return;
-
         try {
-            const msg = JSON.parse(event.data);
+            var msg = JSON.parse(e.data);
             if (msg.type === 'pointer') {
                 laser.active = msg.active;
-                if (msg.active) {
-                    laser.x = msg.x;
-                    laser.y = msg.y;
-                }
+                if (msg.active) { laser.x = msg.x; laser.y = msg.y; }
             }
-        } catch {
-            // Ignore invalid data channel payloads.
-        }
+        } catch (err) { /* ignore */ }
     };
 }
+
+// ── Signaling ──
 
 function connectSignaling() {
     if (requestedRole === 'client' && !roomId) {
-        updateStatus('Invalid client link.', 'error');
-        renderPanels();
-        showHelp('This join link is missing a room id. Re-scan the QR code from the host.', 'error');
-        setRetryButton(true, 'Open host page');
-        updateSessionMeta('Missing room');
+        setStatus('Bad link. Scan the QR again.', 'err');
+        showPanels();
         return;
     }
 
-    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${wsProtocol}//${location.host}`);
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host);
 
-    ws.onopen = () => {
-        updateStatus('Signaling connected. Joining room…');
-        updateSessionMeta();
-        sendSignal({ type: 'join', room: roomId, requestedRole });
+    ws.onopen = function () {
+        setStatus('Joining room...');
+        wsSend({ type: 'join', room: roomId, requestedRole: requestedRole });
     };
 
-    ws.onmessage = async (event) => {
-        const data = JSON.parse(event.data);
+    ws.onmessage = async function (e) {
+        var data = JSON.parse(e.data);
 
-        try {
-            switch (data.type) {
-                case 'joined':
-                    myRole = data.role;
-                    peerPresent = Boolean(data.peerPresent);
-                    updateAddressBar();
-                    renderPanels();
-                    updateSessionMeta();
-                    setDefaultHelp();
-                    setRetryButton(false);
-
-                    if (myRole === 'host') {
-                        initHostRenderer();
-                        updateStatus(peerPresent ? 'Peer detected. Waiting to negotiate…' : 'Waiting for phone to join this room…');
-                        await showQRCode();
-                    } else {
-                        updateStatus(peerPresent ? 'Host is ready. Waiting for offer…' : 'Joined room. Waiting for host…');
-                    }
-                    break;
-
-                case 'peer_ready':
-                    peerPresent = true;
-                    updateSessionMeta();
-                    if (myRole === 'host') {
-                        updateStatus('Phone joined. Starting WebRTC handshake…');
-                        showHelp('The signaling server found both peers. The host is now creating the offer and ICE candidates.', 'info');
-                        await startWebRTCHandshake();
-                    } else {
-                        updateStatus('Host is ready. Waiting for offer…');
-                        showHelp('Both peers are now present. The host should send an offer momentarily.', 'info');
-                    }
-                    break;
-
-                case 'peer_left':
-                    peerPresent = false;
-                    updateSessionMeta();
-                    resetRtcState();
-                    setRetryButton(false);
-
-                    if (myRole === 'host') {
-                        qrDiv.classList.remove('hidden');
-                        updateStatus('Controller disconnected. Waiting for another device…');
-                        showHelp('The room is still active. Re-scan the same QR code or reopen the join URL to reconnect.', 'warn');
-                        await showQRCode();
-                    } else {
-                        updateStatus('Host disconnected. Reload after the host recreates the room.', 'error');
-                        showHelp('The room link still exists, but the desktop host left. Ask the host to reopen the room, then retry.', 'warn');
-                        setRetryButton(true);
-                    }
-                    break;
-
-                case 'offer':
-                    await handleOffer(data.offer);
-                    break;
-
-                case 'answer':
-                    await handleAnswer(data.answer);
-                    break;
-
-                case 'candidate':
-                    await handleCandidate(data.candidate);
-                    break;
-
-                case 'error':
-                    updateStatus('Error: ' + data.message, 'error');
-                    showHelp(data.message, 'error');
-                    setRetryButton(true);
-                    break;
-            }
-        } catch (error) {
-            console.error('Signaling handler failed', error);
-            updateStatus('A signaling step failed. Retry the room.', 'error');
-            showHelp('One of the negotiation steps failed unexpectedly. Reload both peers and try the same room again.', 'error');
-            setRetryButton(true);
+        switch (data.type) {
+            case 'joined':
+                myRole = data.role;
+                peerPresent = !!data.peerPresent;
+                updateUrl();
+                showPanels();
+                showRetry(false);
+                if (myRole === 'host') {
+                    initRenderer();
+                    setStatus(peerPresent ? 'Phone found. Connecting...' : 'Waiting for phone...');
+                    await showQR();
+                } else {
+                    setStatus(peerPresent ? 'Host ready. Waiting for offer...' : 'Waiting for host...');
+                }
+                break;
+            case 'peer_ready':
+                peerPresent = true;
+                if (myRole === 'host') { setStatus('Phone joined. Connecting...'); await startOffer(); }
+                else setStatus('Host ready. Waiting for offer...');
+                break;
+            case 'peer_left':
+                peerPresent = false;
+                cleanupRTC();
+                showRetry(false);
+                if (myRole === 'host') {
+                    qrDiv.classList.remove('hidden');
+                    setStatus('Phone left. Waiting...');
+                    await showQR();
+                } else {
+                    setStatus('Host left.', 'err');
+                    showRetry(true);
+                }
+                break;
+            case 'offer':
+                await handleOffer(data.offer);
+                break;
+            case 'answer':
+                await handleAnswer(data.answer);
+                break;
+            case 'candidate':
+                await handleCandidate(data.candidate);
+                break;
+            case 'error':
+                setStatus(data.message, 'err');
+                showRetry(true);
+                break;
         }
     };
 
-    ws.onclose = () => {
-        if (isDataChannelOpen()) {
-            showHelp('Signaling disconnected, but the direct RTCDataChannel may keep working until one peer leaves.', 'warn');
-            return;
-        }
-
-        updateStatus('Signaling disconnected.', 'error');
-        showHelp('The WebSocket signaling server is unreachable. If you are using a public deployment, confirm it supports WebSockets over HTTPS/WSS.', 'error');
-        setRetryButton(true, 'Reload session');
+    ws.onclose = function () {
+        if (!dcOpen()) { setStatus('Server disconnected.', 'err'); showRetry(true); }
     };
 }
 
-function initHostRenderer() {
+// ── Host: Canvas ──
+
+function initRenderer() {
     if (hostRendererStarted) return;
     hostRendererStarted = true;
 
-    const ctx = canvas.getContext('2d');
+    var ctx = canvas.getContext('2d');
     catImg = new Image();
     catImg.src = 'cat.svg';
 
@@ -766,159 +313,98 @@ function initHostRenderer() {
         canvas.width = canvas.clientWidth;
         canvas.height = canvas.clientHeight;
     }
-
     window.addEventListener('resize', resize);
     resize();
 
     function draw() {
-        const w = canvas.width;
-        const h = canvas.height;
-
+        var w = canvas.width, h = canvas.height;
         ctx.fillStyle = '#0f0f1a';
         ctx.fillRect(0, 0, w, h);
 
-        const targetX = laser.x * w;
-        const targetY = laser.y * h;
+        var lx = laser.x * w, ly = laser.y * h;
 
         if (laser.active) {
             cat.x += (laser.x - cat.x) * CAT_LERP;
             cat.y += (laser.y - cat.y) * CAT_LERP;
         }
 
-        const catPx = cat.x * w;
-        const catPy = cat.y * h;
+        var cx = cat.x * w, cy = cat.y * h;
 
         if (laser.active) {
-            const glow = ctx.createRadialGradient(targetX, targetY, 0, targetX, targetY, 18);
-            glow.addColorStop(0, 'rgba(255, 50, 50, 1)');
-            glow.addColorStop(0.3, 'rgba(255, 50, 50, 0.6)');
-            glow.addColorStop(1, 'rgba(255, 50, 50, 0)');
-            ctx.fillStyle = glow;
+            var g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 18);
+            g.addColorStop(0, 'rgba(255,50,50,1)');
+            g.addColorStop(0.3, 'rgba(255,50,50,0.6)');
+            g.addColorStop(1, 'rgba(255,50,50,0)');
+            ctx.fillStyle = g;
             ctx.beginPath();
-            ctx.arc(targetX, targetY, 18, 0, Math.PI * 2);
+            ctx.arc(lx, ly, 18, 0, Math.PI * 2);
             ctx.fill();
-
             ctx.fillStyle = '#ff4444';
             ctx.beginPath();
-            ctx.arc(targetX, targetY, 4, 0, Math.PI * 2);
+            ctx.arc(lx, ly, 4, 0, Math.PI * 2);
             ctx.fill();
         }
 
         if (catImg.complete) {
-            ctx.drawImage(catImg, catPx - CAT_SIZE / 2, catPy - CAT_SIZE / 2, CAT_SIZE, CAT_SIZE);
+            ctx.drawImage(catImg, cx - CAT_SIZE / 2, cy - CAT_SIZE / 2, CAT_SIZE, CAT_SIZE);
         }
 
         requestAnimationFrame(draw);
     }
-
     requestAnimationFrame(draw);
 }
 
-function initPhoneTouchpad() {
-    if (touchpadInitialized) return;
-    touchpadInitialized = true;
+// ── Phone: Touchpad ──
 
-    ensureMotionListener();
-    startControlLoop();
-    updateTouchDotPosition();
-    updateMotionButton();
+function initTouchpad() {
+    if (touchpadReady) return;
+    touchpadReady = true;
 
-    async function activateTouchControl(event) {
-        event.preventDefault();
-        await beginLaserControl();
-    }
-
-    function updateTouchPointer(event) {
-        const touch = event.touches[0];
-        if (!touch) return;
-
-        const rect = touchpad.getBoundingClientRect();
-        controlPointer.x = clamp((touch.clientX - rect.left) / rect.width, 0, 1);
-        controlPointer.y = clamp((touch.clientY - rect.top) / rect.height, 0, 1);
-        updateTouchDotPosition();
-        sendPointerState(true);
-    }
-
-    function preventWhileActive(event) {
-        if (controlActive) {
-            event.preventDefault();
-            if (!shouldUseTiltControl()) {
-                updateTouchPointer(event);
-            }
+    function send(x, y, active) {
+        if (dcOpen()) dataChannel.send(JSON.stringify({ type: 'pointer', x: x, y: y, active: active }));
+        if (active) {
+            touchDot.classList.remove('hidden');
+            touchDot.style.left = (x * 100) + '%';
+            touchDot.style.top = (y * 100) + '%';
+        } else {
+            touchDot.classList.add('hidden');
         }
     }
 
-    touchpad.addEventListener('touchstart', activateTouchControl);
-    touchpad.addEventListener('touchmove', preventWhileActive);
-    touchpad.addEventListener('touchend', (event) => {
-        event.preventDefault();
-        endLaserControl();
-    });
-    touchpad.addEventListener('touchcancel', (event) => {
-        event.preventDefault();
-        endLaserControl();
-    });
-
-    motionBtn.addEventListener('click', async () => {
-        await requestMotionPermission();
-    });
-
-    let mouseDown = false;
-
-    function updateMousePointer(event) {
-        const rect = touchpad.getBoundingClientRect();
-        controlPointer.x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-        controlPointer.y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
-        updateTouchDotPosition();
-        sendPointerState(true);
+    function coords(touch) {
+        var r = touchpad.getBoundingClientRect();
+        return {
+            x: Math.max(0, Math.min(1, (touch.clientX - r.left) / r.width)),
+            y: Math.max(0, Math.min(1, (touch.clientY - r.top) / r.height))
+        };
     }
 
-    touchpad.addEventListener('mousedown', async (event) => {
-        mouseDown = true;
-        const started = await beginLaserControl();
-        if (!started && typeof DeviceOrientationEvent !== 'undefined') {
-            mouseDown = false;
-            return;
-        }
-        updateMousePointer(event);
-    });
+    function off() {
+        if (dcOpen()) dataChannel.send(JSON.stringify({ type: 'pointer', active: false }));
+        touchDot.classList.add('hidden');
+    }
 
-    touchpad.addEventListener('mousemove', (event) => {
-        if (mouseDown && !latestTilt.hasReading) {
-            updateMousePointer(event);
-        }
-    });
+    touchpad.addEventListener('touchstart', function (e) { e.preventDefault(); var c = coords(e.touches[0]); send(c.x, c.y, true); });
+    touchpad.addEventListener('touchmove', function (e) { e.preventDefault(); var c = coords(e.touches[0]); send(c.x, c.y, true); });
+    touchpad.addEventListener('touchend', function (e) { e.preventDefault(); off(); });
+    touchpad.addEventListener('touchcancel', function (e) { e.preventDefault(); off(); });
 
-    touchpad.addEventListener('mouseup', () => {
-        mouseDown = false;
-        endLaserControl();
-    });
-
-    touchpad.addEventListener('mouseleave', () => {
-        if (mouseDown) {
-            mouseDown = false;
-            endLaserControl();
-        }
-    });
+    var down = false;
+    touchpad.addEventListener('mousedown', function (e) { down = true; var c = coords(e); send(c.x, c.y, true); });
+    touchpad.addEventListener('mousemove', function (e) { if (down) { var c = coords(e); send(c.x, c.y, true); } });
+    touchpad.addEventListener('mouseup', function () { down = false; off(); });
+    touchpad.addEventListener('mouseleave', function () { if (down) { down = false; off(); } });
 }
 
-function handleRetry() {
-    if (requestedRole === 'client' && !roomId) {
-        location.href = location.origin + location.pathname;
-        return;
-    }
-    location.reload();
-}
+// ── Boot ──
 
-window.addEventListener('load', () => {
-    renderPanels();
-    updateSessionMeta();
-    setDefaultHelp();
-    updateAddressBar();
-    retryBtn.addEventListener('click', handleRetry);
+window.addEventListener('load', function () {
+    showPanels();
+    updateUrl();
+    retryBtn.addEventListener('click', function () { location.reload(); });
     connectSignaling();
 });
 
-window.addEventListener('beforeunload', () => {
-    sendSignal({ type: 'leave' });
+window.addEventListener('beforeunload', function () {
+    wsSend({ type: 'leave' });
 });

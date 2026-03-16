@@ -1,13 +1,11 @@
-/* ── Reset ── */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-/* ── Body ── */
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: sans-serif;
   background: #1a1a2e;
   color: #e0e0e0;
   display: flex;
@@ -17,7 +15,6 @@ body {
   overflow: hidden;
 }
 
-/* ── Status ── */
 .status {
   margin: 12px;
   padding: 8px 20px;
@@ -27,90 +24,34 @@ body {
   background: #16213e;
   color: #a0c4ff;
   text-align: center;
-  flex-shrink: 0;
 }
 
-.status.connected {
+.status.ok {
   background: #0a3d0a;
   color: #7fff7f;
 }
 
-.status.error {
+.status.err {
   background: #3d0a0a;
   color: #ff7f7f;
 }
 
-.session-meta {
-  margin: 0 12px 10px;
-  padding: 10px 16px;
-  max-width: 900px;
-  width: calc(100% - 24px);
-  border-radius: 14px;
-  background: rgba(22, 33, 62, 0.9);
-  color: #c6d4ea;
-  font-size: 13px;
-  text-align: center;
-  line-height: 1.5;
-}
-
-.session-meta code {
-  color: #ffffff;
-}
-
-.help-card {
-  margin: 0 12px 10px;
-  padding: 12px 16px;
-  max-width: 900px;
-  width: calc(100% - 24px);
-  border-radius: 14px;
-  border: 1px solid #2a2a4a;
-  background: rgba(20, 26, 45, 0.95);
-  color: #a9bad4;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.help-card.info {
-  border-color: #29476b;
-}
-
-.help-card.success {
-  border-color: #255b32;
-  color: #bce6c4;
-}
-
-.help-card.warn {
-  border-color: #6b5129;
-  color: #f7cf8f;
-}
-
-.help-card.error {
-  border-color: #6b2929;
-  color: #f6b0b0;
-}
-
-.action-row {
+.retry-btn {
   margin-bottom: 10px;
-  min-height: 40px;
-}
-
-.action-btn {
-  padding: 10px 18px;
+  padding: 8px 18px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 20px;
   background: #5f7cff;
-  color: #ffffff;
-  font-size: 14px;
+  color: #fff;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 8px 18px rgba(26, 55, 180, 0.35);
 }
 
-.action-btn:hover {
-  background: #7890ff;
+.hidden {
+  display: none !important;
 }
 
-/* ── Panels ── */
 .panel {
   width: 100%;
   flex: 1;
@@ -119,61 +60,38 @@ body {
   align-items: center;
 }
 
-.hidden {
-  display: none !important;
-}
-
-/* ── QR (Host) ── */
-.qr-container {
-  margin-top: 40px;
+.qr-box {
+  margin-top: 30px;
   text-align: center;
-  max-width: 900px;
-  width: calc(100% - 24px);
-  padding: 18px;
-  border-radius: 16px;
-  background: rgba(22, 33, 62, 0.72);
 }
 
-.qr-container p {
-  margin-bottom: 12px;
-  font-size: 15px;
+.qr-box p {
+  margin-bottom: 10px;
+  font-size: 14px;
   color: #8899aa;
 }
 
-.qr-container .qr-title {
-  color: #dce6ff;
-  font-weight: 700;
-}
-
-.qr-container .qr-url {
-  font-size: 12px;
-  color: #c6d4ea;
+.qr-box .qr-url {
+  font-size: 11px;
+  color: #8899aa;
   word-break: break-all;
 }
 
-.qr-container .qr-note {
-  font-size: 12px;
-  line-height: 1.6;
+.qr-box img {
+  border: 3px solid #2a2a4a;
+  border-radius: 10px;
+  background: #fff;
 }
 
-.qr-container img {
-  border: 4px solid #2a2a4a;
-  border-radius: 12px;
-  background: #ffffff;
-}
-
-/* ── Canvas (Host) ── */
 #arena {
   flex: 1;
   width: calc(100% - 24px);
   max-width: 900px;
   margin: 12px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: #0f0f1a;
-  display: block;
 }
 
-/* ── Touchpad (Phone) ── */
 .instruction {
   margin: 16px 0 8px;
   font-size: 14px;
@@ -181,16 +99,12 @@ body {
   text-align: center;
 }
 
-#motion-btn {
-  margin-bottom: 12px;
-}
-
 #touchpad {
   position: relative;
   flex: 1;
   width: calc(100% - 24px);
   margin: 0 12px 12px;
-  border-radius: 16px;
+  border-radius: 14px;
   background: #16213e;
   border: 2px solid #2a2a4a;
   touch-action: none;
@@ -199,7 +113,6 @@ body {
   cursor: crosshair;
 }
 
-/* Visual feedback dot on phone */
 .touch-dot {
   position: absolute;
   width: 24px;
