@@ -307,7 +307,7 @@ function initRenderer() {
 
     var ctx = canvas.getContext('2d');
     catImg = new Image();
-    catImg.src = 'cat.svg';
+    catImg.src = 'cat.png';
 
     function resize() {
         canvas.width = canvas.clientWidth;
