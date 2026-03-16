@@ -1,3 +1,17 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&display=swap');
+
+:root {
+  --bg: #1a1614;
+  --bg-warm: #231e1b;
+  --surface: rgba(40, 33, 28, 0.85);
+  --border: rgba(90, 72, 55, 0.35);
+  --text: #f0e6d3;
+  --text-dim: #a0917e;
+  --red: #e54040;
+  --amber: #d4a24e;
+  --green: #5cb870;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -5,52 +19,72 @@
 }
 
 body {
-  font-family: sans-serif;
-  background: #1a1a2e;
-  color: #e0e0e0;
+  font-family: 'Syne', sans-serif;
+  color: var(--text);
   display: flex;
   flex-direction: column;
   align-items: center;
   min-height: 100vh;
   overflow: hidden;
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(60, 40, 20, 0.5) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 50% at 80% 100%, rgba(50, 25, 15, 0.4) 0%, transparent 60%);
 }
 
+/* ── Status chip ── */
+
 .status {
-  margin: 12px;
-  padding: 8px 20px;
-  font-size: 14px;
+  margin: 16px 12px 8px;
+  padding: 6px 18px;
+  font-size: 13px;
   font-weight: 600;
-  border-radius: 20px;
-  background: #16213e;
-  color: #a0c4ff;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
   text-align: center;
+  animation: fadeIn 0.5s ease both;
 }
 
 .status.ok {
-  background: #0a3d0a;
-  color: #7fff7f;
+  background: rgba(35, 65, 40, 0.7);
+  border-color: rgba(92, 184, 112, 0.3);
+  color: var(--green);
 }
 
 .status.err {
-  background: #3d0a0a;
-  color: #ff7f7f;
+  background: rgba(65, 25, 25, 0.7);
+  border-color: rgba(229, 64, 64, 0.25);
+  color: var(--red);
 }
 
+/* ── Retry ── */
+
 .retry-btn {
-  margin-bottom: 10px;
-  padding: 8px 18px;
+  margin-bottom: 8px;
+  padding: 8px 20px;
   border: 0;
-  border-radius: 20px;
-  background: #5f7cff;
-  color: #fff;
+  border-radius: 999px;
+  background: var(--amber);
+  color: var(--bg);
+  font-family: 'Syne', sans-serif;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  transition: background 0.2s;
+}
+
+.retry-btn:hover {
+  background: #e0b35c;
 }
 
 .hidden {
   display: none !important;
 }
+
+/* ── Panels ── */
 
 .panel {
   width: 100%;
@@ -58,45 +92,66 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  animation: fadeUp 0.6s ease both;
 }
 
+/* ── QR card ── */
+
 .qr-box {
-  margin-top: 30px;
+  margin-top: 24px;
+  padding: 20px;
   text-align: center;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  animation: fadeIn 0.7s ease 0.15s both;
 }
 
 .qr-box p {
   margin-bottom: 10px;
   font-size: 14px;
-  color: #8899aa;
+  font-weight: 600;
+  color: var(--text-dim);
 }
 
 .qr-box .qr-url {
+  margin-top: 8px;
+  margin-bottom: 0;
   font-size: 11px;
-  color: #8899aa;
+  font-weight: 400;
+  color: var(--text-dim);
   word-break: break-all;
+  opacity: 0.7;
 }
 
 .qr-box img {
-  border: 3px solid #2a2a4a;
   border-radius: 10px;
+  border: 3px solid var(--border);
   background: #fff;
 }
+
+/* ── Canvas ── */
 
 #arena {
   flex: 1;
   width: calc(100% - 24px);
   max-width: 900px;
   margin: 12px;
-  border-radius: 10px;
-  background: #0f0f1a;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #110f0d;
+  animation: fadeUp 0.6s ease 0.2s both;
 }
 
+/* ── Phone UI ── */
+
 .instruction {
-  margin: 16px 0 8px;
-  font-size: 14px;
-  color: #8899aa;
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
   text-align: center;
+  letter-spacing: 0.01em;
 }
 
 #touchpad {
@@ -105,20 +160,39 @@ body {
   width: calc(100% - 24px);
   margin: 0 12px 12px;
   border-radius: 14px;
-  background: #16213e;
-  border: 2px solid #2a2a4a;
+  background: var(--bg-warm);
+  border: 2px solid var(--border);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   cursor: crosshair;
+  transition: border-color 0.3s;
+  animation: fadeUp 0.5s ease 0.25s both;
+}
+
+#touchpad:active {
+  border-color: var(--red);
 }
 
 .touch-dot {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: radial-gradient(circle, #ff3333 30%, transparent 70%);
+  background: radial-gradient(circle, var(--red) 25%, rgba(229, 64, 64, 0.4) 55%, transparent 70%);
   pointer-events: none;
   transform: translate(-50%, -50%);
+  box-shadow: 0 0 12px rgba(229, 64, 64, 0.5);
+}
+
+/* ── Animations ── */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }

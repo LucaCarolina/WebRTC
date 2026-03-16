@@ -318,7 +318,7 @@ function initRenderer() {
 
     function draw() {
         var w = canvas.width, h = canvas.height;
-        ctx.fillStyle = '#0f0f1a';
+        ctx.fillStyle = '#110f0d';
         ctx.fillRect(0, 0, w, h);
 
         var lx = laser.x * w, ly = laser.y * h;
