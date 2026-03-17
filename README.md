@@ -242,7 +242,7 @@ The project direction became much clearer during this week.
 Instead of staying as only a connection test, it became a real control-based experience with a defined concept.
 
 ### Missed the consult: 
-I had missed the consult for personal reasons. As my parants showed up in Kortjik for a suprise visit and it felt bad to not be with them and how them around the city as they werent here for a long time. and as everything was kind of working, and i organised the concept properly i decided to skip the consult. Apologies.
+I had missed the consult for personal reasons. As my parants showed up in Kortjik for a suprise visit and it felt bad to not be with them and how them around the city as they werent here for a long time. i was initially 17th in line for consult, and by the time the class ended, i was 4th, but as everything was kind of working, and i organised the concept properly i decided to skip the consult and join my parents. Apologies.
 
 
 ## Week 3

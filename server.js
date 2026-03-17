@@ -91,7 +91,11 @@ function cleanupPeer(ws) {
 
     ws.roomId = null;
     ws.role = null;
-}
+}//Peer disconnect cleanup so the room stays usable
+//When the phone disconnects, the host receives a peer_left message and shows the QR code again. 
+// A new device can re-join the same room without the host needing to reload or create a new session.
+
+
 
 function joinRoom(ws, data) {
     const roomId = String(data.room || '').trim();
