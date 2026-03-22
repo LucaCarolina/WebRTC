@@ -1,6 +1,7 @@
 # WebRTC Smartphone-to-Desktop Control Project
 Overall for the assignment i used ai to help me rephrase (phrase sometimes) the readme file, as it was turning to be way too messy when i was doing it myself. 
 
+In this project the phone basically becomes the remote for a laser, and you get to play with the cat on the screen using it. If you allow the permissions you can tilt your phone in order to get a fun experience at playing with the cat. The cat also leaves a trail behind so besides playing with the cat, you can also draw with it. If you make any sort of sound, that will scare the cat, making it jump. 
 
 ## What this repository is
 
