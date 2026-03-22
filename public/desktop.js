@@ -63,7 +63,7 @@ function decodePeerData(data) {
 }
 
 function cleanupPeer() {
-    if (peer) { try { peer.destroy(); } catch (e) { /* ignore */ } peer = null; }
+    if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
 }
 
 async function getJoinUrl() {
@@ -128,7 +128,7 @@ function startHostPeer(clientId) {
                 catJumpTarget = Math.max(0, Math.min(1, msg.jump));
                 lastJumpAt    = Date.now();
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     });
 }
 
