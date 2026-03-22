@@ -51,6 +51,7 @@ Once the connection is established, the phone sends small control messages to th
 The desktop reads those messages and updates the visual experience.
 
 ### ‼️To create the credentials needed to access the tilt and microphone on the phone, run the following command in the terminal in the root directory of the project
+
 ```bash
 openssl req -x509 -newkey rsa:2048 -keyout localhost.key -out localhost.crt -days 365 -nodes -subj "/CN=localhost"
 ```
@@ -138,7 +139,7 @@ function getLanIPs() {
 ```
 
 ```js
-// app.js – swaps localhost for the real IP when building the QR join URL
+// desktop.js – swaps localhost for the real IP when building the QR join URL (host page)
 if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
     var res = await fetch('/ip');
     var data = await res.json();

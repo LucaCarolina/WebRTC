@@ -112,6 +112,25 @@ io.on('connection', (socket) => {
     });
 });
 
+// Teacher-style sender/receiver demo (namespace /class — does not use pairWith)
+const classNs      = io.of('/class');
+const classClients = {};
+classNs.on('connection', (socket) => {
+    classClients[socket.id] = { id: socket.id };
+    classNs.emit('clients', classClients);
+
+    socket.on('disconnect', () => {
+        delete classClients[socket.id];
+        classNs.emit('clients', classClients);
+    });
+
+    socket.on('signal', (peerId, signal) => {
+        const pid = String(peerId || '');
+        if (!pid || !classClients[pid]) return;
+        classNs.to(pid).emit('signal', pid, signal, socket.id);
+    });
+});
+
 // start
 const PORT  = process.env.PORT || 3000;
 const proto = secure ? 'https' : 'http';
@@ -119,6 +138,4 @@ const proto = secure ? 'https' : 'http';
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🐱 Cat Laser Pointer Remote`);
     console.log(`   Local:   ${proto}://localhost:${PORT}`);
-    getLanIPs().forEach((ip) => console.log(`   Network: ${proto}://${ip}:${PORT}`));
-    console.log('');
 }); 
