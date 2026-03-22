@@ -34,6 +34,11 @@ var lastJumpAt    = 0;
 var JUMP_DECAY_MS = 380;
 var JUMP_MAX_PX   = 100;
 
+/** Red trail: 2s full opacity, then 1.5s linear fade; oldest points drop off first (follows cat path while laser is on). */
+var TRAIL_FULL_MS       = 2000;
+var TRAIL_FADE_MS       = 1500;
+var TRAIL_MIN_DIST_NORM = 0.0015;
+
 function setStatus(msg, state) {
     statusDiv.textContent = msg;
     statusDiv.className   = 'status' + (state ? ' ' + state : '');
@@ -181,12 +186,24 @@ function initRenderer() {
     catImg = new Image();
     catImg.src = 'cat.svg';
 
+    var trail           = [];
+    var prevLaserActive = false;
+
+    function trailPointAlpha(now, t) {
+        var age = now - t;
+        if (age <= TRAIL_FULL_MS) return 1;
+        if (age >= TRAIL_FULL_MS + TRAIL_FADE_MS) return 0;
+        return 1 - (age - TRAIL_FULL_MS) / TRAIL_FADE_MS;
+    }
+
     function resize() { canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight; }
     window.addEventListener('resize', resize);
     resize();
 
     function draw() {
         var w = canvas.width, h = canvas.height;
+        var now = performance.now();
+
         ctx.fillStyle = '#110f0d';
         ctx.fillRect(0, 0, w, h);
 
@@ -205,6 +222,52 @@ function initRenderer() {
             cat.x += (laser.x - cat.x) * CAT_LERP;
             cat.y += (laser.y - cat.y) * CAT_LERP;
         }
+
+        if (laser.active) {
+            if (!prevLaserActive) {
+                trail.push({ x: cat.x, y: cat.y, t: now });
+            } else if (trail.length) {
+                var last = trail[trail.length - 1];
+                var dx   = cat.x - last.x;
+                var dy   = cat.y - last.y;
+                if (dx * dx + dy * dy >= TRAIL_MIN_DIST_NORM * TRAIL_MIN_DIST_NORM) {
+                    trail.push({ x: cat.x, y: cat.y, t: now });
+                }
+            } else {
+                trail.push({ x: cat.x, y: cat.y, t: now });
+            }
+        }
+        prevLaserActive = laser.active;
+
+        while (trail.length && trailPointAlpha(now, trail[0].t) <= 0) {
+            trail.shift();
+        }
+
+        ctx.save();
+        ctx.lineCap  = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 5;
+        for (var i = 0; i < trail.length - 1; i++) {
+            var a0 = trailPointAlpha(now, trail[i].t);
+            var a1 = trailPointAlpha(now, trail[i + 1].t);
+            var segA = Math.min(a0, a1);
+            if (segA <= 0) continue;
+            ctx.strokeStyle = 'rgba(255, 45, 45, ' + segA + ')';
+            ctx.beginPath();
+            ctx.moveTo(trail[i].x * w, trail[i].y * h);
+            ctx.lineTo(trail[i + 1].x * w, trail[i + 1].y * h);
+            ctx.stroke();
+        }
+        if (trail.length === 1) {
+            var aDot = trailPointAlpha(now, trail[0].t);
+            if (aDot > 0) {
+                ctx.fillStyle = 'rgba(255, 45, 45, ' + aDot + ')';
+                ctx.beginPath();
+                ctx.arc(trail[0].x * w, trail[0].y * h, 2.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        ctx.restore();
 
         var cx     = cat.x * w;
         var cy     = cat.y * h;
