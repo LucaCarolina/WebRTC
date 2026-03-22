@@ -8,10 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Serve static files from the 'public' folder
 app.use(express.static('public'));
 
-// Return a QR code image for any URL
 app.get('/qr', async (req, res) => {
     try {
         const url = req.query.url;
@@ -23,7 +21,6 @@ app.get('/qr', async (req, res) => {
     }
 });
 
-// Return the server's usable URLs so the host page can build a scannable QR URL
 app.get('/ip', (req, res) => {
     res.json({ ips: getLanIPs() });
 });
@@ -41,7 +38,6 @@ function getLanIPs() {
     return ips.length > 0 ? ips : ['localhost'];
 }
 
-// ─── Signaling ───
 
 const rooms = new Map();
 const RELAY_MESSAGE_TYPES = new Set(['offer', 'answer', 'candidate']);
@@ -91,10 +87,7 @@ function cleanupPeer(ws) {
 
     ws.roomId = null;
     ws.role = null;
-}//Peer disconnect cleanup so the room stays usable
-//When the phone disconnects, the host receives a peer_left message and shows the QR code again. 
-// A new device can re-join the same room without the host needing to reload or create a new session.
-
+}
 
 
 function joinRoom(ws, data) {
@@ -155,7 +148,7 @@ function relayToPeer(ws, message) {
     }
 
     send(target, message);
-}
+}//
 
 wss.on('connection', (ws) => {
     ws.roomId = null;

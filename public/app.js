@@ -35,7 +35,7 @@ var servers = {
     iceServers: [{
         urls: 'stun:stun.l.google.com:19302'
     }]
-};
+};//role of stun - help each peer discover a reachable address/port mapping so a direct connection can be attempted
 
 // ── Helpers ──
 
@@ -120,11 +120,11 @@ function cleanupRTC() {
 function makePeerConnection() {
     if (peerConnection) return peerConnection;
 
-    peerConnection = new RTCPeerConnection(servers);
+    peerConnection = new RTCPeerConnection(servers); // the thing that tries to create a direct peer-to-peer path (using ICE + STUN)
 
     peerConnection.onicecandidate = function (e) {
         if (e.candidate) wsSend({ type: 'candidate', candidate: e.candidate });
-    };
+    };//ICE candidates exchange (over WS)
 
     peerConnection.oniceconnectionstatechange = function () {
         if (!peerConnection) return;
@@ -149,7 +149,7 @@ function makePeerConnection() {
     peerConnection.ondatachannel = function (e) {
         dataChannel = e.channel;
         setupDataChannel();
-    };
+    };//DataChannel “appears” on client via ondatachannel
 
     return peerConnection;
 }
@@ -171,7 +171,7 @@ async function startOffer() {
     var offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     wsSend({ type: 'offer', offer: offer });
-}
+}//Host starts WebRTC: create PC + create DataChannel + createOffer + send offer 
 
 async function handleOffer(offer) {
     cleanupRTC();
@@ -181,7 +181,7 @@ async function handleOffer(offer) {
     var answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     wsSend({ type: 'answer', answer: answer });
-}
+}//Client receives offer (over WS), sets it, answers, sends answer back (over WS)
 
 async function handleAnswer(answer) {
     if (!peerConnection) return;
@@ -197,7 +197,7 @@ async function handleCandidate(candidate) {
     }
     try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidate)); }
     catch (e) { console.error('ICE error', e); }
-}
+}//This fixes a real race: candidates can arrive before setRemoteDescription() completes.
 
 function setupDataChannel() {
     if (!dataChannel) return;
@@ -241,7 +241,7 @@ function connectSignaling() {
         setStatus('Joining room...');
         wsSend({ type: 'join', room: roomId, requestedRole: requestedRole });
     };
-
+    //Both sides connect to WebSocket and join the same room
     ws.onmessage = async function (e) {
         var data = JSON.parse(e.data);
 
@@ -369,7 +369,7 @@ function initTouchpad() {
         } else {
             touchDot.classList.add('hidden');
         }
-    }
+    }//Once the DataChannel is open, WebRTC carries your real app data
 
     function coords(touch) {
         var r = touchpad.getBoundingClientRect();
