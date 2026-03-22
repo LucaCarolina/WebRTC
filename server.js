@@ -1,204 +1,124 @@
+require('dotenv').config();
 const express = require('express');
-const http = require('http');
-const os = require('os');
-const WebSocket = require('ws');
-const QRCode = require('qrcode');
+const os      = require('os');
+const fs      = require('fs');
+const QRCode  = require('qrcode');
+const { Server } = require('socket.io');
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
+// TLS
+const isDevelopment = !process.env.NODE_ENV || process.env.NODE_ENV === 'development';
+const tlsOptions    = isDevelopment && fs.existsSync('./localhost.key') && fs.existsSync('./localhost.crt')
+    ? { key: fs.readFileSync('./localhost.key'), cert: fs.readFileSync('./localhost.crt') }
+    : {};
+
+const secure = Object.keys(tlsOptions).length > 0;
+const server = require(secure ? 'https' : 'http').createServer(tlsOptions, app);
+const io     = new Server(server);
+
+// static + helpers
 app.use(express.static('public'));
 
-app.get('/qr', async (req, res) => {
-    try {
-        const url = req.query.url;
-        if (!url) return res.status(400).send('URL required');
-        const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 256 });
-        res.send(`<img src="${qrDataUrl}" alt="QR Code" />`);
-    } catch (error) {
-        res.status(500).send('Error generating QR code');
-    }
-});
-
-app.get('/ip', (req, res) => {
-    res.json({ ips: getLanIPs() });
-});
-
 function getLanIPs() {
-    const interfaces = os.networkInterfaces();
     const ips = [];
-    for (const name of Object.keys(interfaces)) {
-        for (const iface of interfaces[name]) {
-            if (iface.family === 'IPv4' && !iface.internal) {
-                ips.push(iface.address);
-            }
+    for (const ifaces of Object.values(os.networkInterfaces())) {
+        for (const iface of ifaces) {
+            if (iface.family === 'IPv4' && !iface.internal) ips.push(iface.address);
         }
     }
     return ips.length > 0 ? ips : ['localhost'];
 }
 
+app.get('/qr', async (req, res) => {
+    if (!req.query.url) return res.status(400).send('URL required');
+    try {
+        const dataUrl = await QRCode.toDataURL(req.query.url, { margin: 1, width: 256 });
+        res.send(`<img src="${dataUrl}" alt="QR Code" />`);
+    } catch {
+        res.status(500).send('Error generating QR code');
+    }
+});
 
-const rooms = new Map();
-const RELAY_MESSAGE_TYPES = new Set(['offer', 'answer', 'candidate']);
+app.get('/ip', (_req, res) => res.json({ ips: getLanIPs() }));
 
-function send(ws, payload) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
+// pairing state
+/** socketId -> true  (all connected sockets) */
+const connected = new Set();
+/** hostSocketId -> clientSocketId */
+const hostToClient = new Map();
+/** clientSocketId -> hostSocketId */
+const clientToHost = new Map();
+
+function notifyPeerLeft(id) {
+    if (clientToHost.has(id)) {
+        const hostId = clientToHost.get(id);
+        clientToHost.delete(id);
+        if (hostToClient.get(hostId) === id) hostToClient.delete(hostId);
+        io.to(hostId).emit('peer_left');
+    } else if (hostToClient.has(id)) {
+        const clientId = hostToClient.get(id);
+        hostToClient.delete(id);
+        if (clientId) {
+            clientToHost.delete(clientId);
+            io.to(clientId).emit('peer_left');
+        }
     }
 }
 
-function getRoom(roomId) {
-    if (!rooms.has(roomId)) {
-        rooms.set(roomId, { host: null, client: null });
-    }
-    return rooms.get(roomId);
-}
+// socket.io
+io.on('connection', (socket) => {
+    connected.add(socket.id);
 
-function getOtherRole(role) {
-    return role === 'host' ? 'client' : 'host';
-}
+    socket.on('pairWith', (hostId) => {
+        const hid = String(hostId || '').trim();
+        if (!hid || !connected.has(hid)) {
+            socket.emit('pair_error', { message: 'Host not found. Scan the QR again.' });
+            return;
+        }
+        if (hid === socket.id) {
+            socket.emit('pair_error', { message: 'Invalid pairing.' });
+            return;
+        }
 
-function chooseRole(room, requestedRole) {
-    if (requestedRole === 'host' || requestedRole === 'client') {
-        return room[requestedRole] ? null : requestedRole;
-    }
-    if (!room.host) return 'host';
-    if (!room.client) return 'client';
-    return null;
-}
+        // Evict any previous client from this host
+        const prev = hostToClient.get(hid);
+        if (prev && prev !== socket.id) {
+            clientToHost.delete(prev);
+            io.to(prev).emit('peer_left');
+        }
 
-function cleanupPeer(ws) {
-    if (!ws.roomId || !ws.role) return;
-
-    const room = rooms.get(ws.roomId);
-    if (!room) return;
-
-    if (room[ws.role] === ws) {
-        room[ws.role] = null;
-    }
-
-    const otherPeer = room[getOtherRole(ws.role)];
-    send(otherPeer, { type: 'peer_left', role: ws.role, room: ws.roomId });
-
-    if (!room.host && !room.client) {
-        rooms.delete(ws.roomId);
-    }
-
-    ws.roomId = null;
-    ws.role = null;
-}
-
-
-function joinRoom(ws, data) {
-    const roomId = String(data.room || '').trim();
-    const requestedRole = data.requestedRole;
-
-    if (!/^[a-zA-Z0-9_-]{4,32}$/.test(roomId)) {
-        send(ws, { type: 'error', message: 'Invalid room id.' });
-        return;
-    }
-
-    cleanupPeer(ws);
-
-    const room = getRoom(roomId);
-    const role = chooseRole(room, requestedRole);
-
-    if (!role) {
-        send(ws, { type: 'error', message: 'That room slot is already in use.' });
-        return;
-    }
-
-    ws.roomId = roomId;
-    ws.role = role;
-    room[role] = ws;
-
-    console.log(`${role} joined room ${roomId}`);
-
-    const otherPeer = room[getOtherRole(role)];
-    send(ws, {
-        type: 'joined',
-        room: roomId,
-        role,
-        peerPresent: Boolean(otherPeer),
+        hostToClient.set(hid, socket.id);
+        clientToHost.set(socket.id, hid);
+        io.to(hid).emit('peer_ready', { clientId: socket.id });
     });
 
-    if (otherPeer) {
-        send(ws, { type: 'peer_ready', room: roomId, peerRole: otherPeer.role });
-        send(otherPeer, { type: 'peer_ready', room: roomId, peerRole: role });
-    }
-}
-
-function relayToPeer(ws, message) {
-    if (!ws.roomId || !ws.role) {
-        send(ws, { type: 'error', message: 'Join a room before signaling.' });
-        return;
-    }
-
-    const room = rooms.get(ws.roomId);
-    if (!room) {
-        send(ws, { type: 'error', message: 'Room no longer exists.' });
-        return;
-    }
-
-    const target = room[getOtherRole(ws.role)];
-    if (!target) {
-        send(ws, { type: 'error', message: 'The other peer is not connected yet.' });
-        return;
-    }
-
-    send(target, message);
-}//
-
-wss.on('connection', (ws) => {
-    ws.roomId = null;
-    ws.role = null;
-
-    ws.on('message', (message) => {
-        let data;
-        try {
-            data = JSON.parse(message);
-        } catch (error) {
-            send(ws, { type: 'error', message: 'Invalid message format.' });
-            return;
-        }
-
-        if (data.type === 'join') {
-            joinRoom(ws, data);
-            return;
-        }
-
-        if (data.type === 'leave') {
-            cleanupPeer(ws);
-            return;
-        }
-
-        if (RELAY_MESSAGE_TYPES.has(data.type)) {
-            relayToPeer(ws, data);
-            return;
-        }
-
-        send(ws, { type: 'error', message: `Unsupported message type: ${data.type}` });
+    socket.on('signal', (peerId, signal) => {
+        const pid = String(peerId || '');
+        if (!pid || !connected.has(pid)) return;
+        const ok = hostToClient.get(socket.id) === pid || clientToHost.get(socket.id) === pid;
+        if (ok) io.to(pid).emit('signal', signal, socket.id);
     });
 
-    ws.on('close', () => {
-        if (ws.role) {
-            console.log(`${ws.role} disconnected from room ${ws.roomId}`);
-        }
-        cleanupPeer(ws);
+    socket.on('leave', () => {
+        notifyPeerLeft(socket.id);
+        connected.delete(socket.id);
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`disconnect ${socket.id}`);
+        notifyPeerLeft(socket.id);
+        connected.delete(socket.id);
     });
 });
 
-// ─── Start ───
-
-const PORT = process.env.PORT || 3000;
+// start
+const PORT  = process.env.PORT || 3000;
+const proto = secure ? 'https' : 'http';
 
 server.listen(PORT, '0.0.0.0', () => {
-    const ips = getLanIPs();
     console.log(`\n🐱 Cat Laser Pointer Remote`);
-    console.log(`   Local:   http://localhost:${PORT}`);
-    ips.forEach(ip => {
-        console.log(`   Network: http://${ip}:${PORT}`);
-    });
+    console.log(`   Local:   ${proto}://localhost:${PORT}`);
+    getLanIPs().forEach((ip) => console.log(`   Network: ${proto}://${ip}:${PORT}`));
     console.log('');
-});
+}); 

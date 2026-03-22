@@ -15,17 +15,28 @@
   <button id="retry-btn" class="retry-btn hidden">Retry</button>
 
   <div id="host-panel" class="panel hidden">
+    <p class="host-hint hidden" id="host-hint">Host: keep this tab open. The QR opens the phone on <strong>https://</strong> (use TLS certs in dev). When the phone connects, control runs over WebRTC.</p>
     <div id="qr" class="qr-box"></div>
     <canvas id="arena"></canvas>
   </div>
 
   <div id="phone-panel" class="panel hidden">
-    <p class="instruction">Drag your finger to move the laser</p>
+    <p class="instruction" id="phone-instruction">Phone: open the QR link (https). When Connected, use the touch pad, or tap once to allow tilt + microphone together.</p>
+    <p class="phone-sub hidden" id="phone-sub" role="status"></p>
+    <pre id="phone-perm-debug" class="phone-perm-debug hidden" aria-live="polite"></pre>
+    <div id="phone-actions" class="phone-actions hidden">
+      <button type="button" class="action-btn" id="btn-start-sensors">Allow tilt &amp; microphone</button>
+    </div>
+    <div id="hold-zone" class="hold-zone hidden" aria-label="Hold to activate laser">
+      <span class="hold-zone-label">Hold here to aim the laser (tilt the phone while holding)</span>
+    </div>
     <div id="touchpad">
       <div id="touch-dot" class="touch-dot hidden"></div>
     </div>
   </div>
 
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js" integrity="sha512-0f7Ahsuvr+/P2btTY4mZIw9Vl23lS6LY/Y7amdkmUg2dqsUF+cTe4QjWvj/NIBHJoGksOiqndKQuI9yzn2hB0g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="app.js"></script>
 </body>
 </html>
